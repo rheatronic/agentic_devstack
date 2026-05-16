@@ -1,0 +1,77 @@
+# =============================================================================
+# LiteLLM Proxy config — llm-stack
+# Docs: https://docs.litellm.ai/docs/proxy/configs
+#
+# Model name conventions used by clients:
+#   local/qwen3-coder-agentic   → llama-server :8000  (agentic, Claude Code / Continue chat)
+#   local/qwen2.5-coder         → vLLM :8001          (autocomplete, Continue tab)
+#   claude-opus-4               → Anthropic API        (support contract sessions)
+#   deepseek/deepseek-v4-pro    → DeepSeek API         (stubbed, inert until key set)
+# =============================================================================
+
+model_list:
+
+  # ---------------------------------------------------------------------------
+  # Local: Qwen3-Coder-Next via llama-server
+  # Active when 'agentic' profile is running.
+  # ---------------------------------------------------------------------------
+  - model_name: local/qwen3-coder-agentic
+    litellm_params:
+      model: openai/qwen3-coder-next          # openai/ prefix = use OpenAI-compat endpoint
+      api_base: http://llama-server:8000/v1
+      api_key: "none"                          # llama-server needs no key
+      # Qwen3 supports a thinking budget; disable for latency-sensitive agentic use.
+      # Re-enable by passing extra_body.thinking in client requests if needed.
+      stream: true
+
+  # ---------------------------------------------------------------------------
+  # Local: Qwen2.5-Coder via vLLM
+  # Active when 'autocomplete' profile is running.
+  # ---------------------------------------------------------------------------
+  - model_name: local/qwen2.5-coder
+    litellm_params:
+      model: openai/qwen2.5-coder
+      api_base: http://vllm:8001/v1
+      api_key: "none"
+      stream: true
+
+  # ---------------------------------------------------------------------------
+  # Anthropic: Claude Opus 4 (off-board, support contract sessions)
+  # ---------------------------------------------------------------------------
+  - model_name: claude-opus-4
+    litellm_params:
+      model: anthropic/claude-opus-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # ---------------------------------------------------------------------------
+  # DeepSeek V4-Pro — STUBBED. Will 401 until DEEPSEEK_API_KEY is set.
+  # ---------------------------------------------------------------------------
+  - model_name: deepseek/deepseek-v4-pro
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+# -----------------------------------------------------------------------------
+# Router settings
+# -----------------------------------------------------------------------------
+router_settings:
+  # Retry on upstream failures before surfacing an error to the client
+  num_retries: 2
+  timeout: 300                  # seconds — long for large agentic completions
+  retry_after: 5
+
+# -----------------------------------------------------------------------------
+# General proxy settings
+# -----------------------------------------------------------------------------
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # Persist request logs to the mounted SQLite volume
+  database_url: "sqlite:////app/data/litellm.db"
+  # Allow all CORS origins — tighten in Stage 7 if needed
+  allow_requests_on_db_unavailable: true
+
+litellm_settings:
+  # Drop params that a backend doesn't support rather than erroring
+  drop_params: true
+  # Log every request to stdout for debugging
+  set_verbose: false

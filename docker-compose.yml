@@ -1,0 +1,138 @@
+name: llm-stack
+
+# =============================================================================
+# Services are gated by profiles so only one inference backend runs at a time.
+#
+#   Start agentic stack:     docker compose --profile agentic up -d
+#   Start autocomplete stack: docker compose --profile autocomplete up -d
+#   Start LiteLLM only:      docker compose --profile proxy up -d
+#   Swap models:             see scripts/swap.sh
+#
+# LiteLLM is included in all profiles (it is the shared gateway).
+# =============================================================================
+
+x-gpu-common: &gpu-common
+  runtime: nvidia
+  environment:
+    NVIDIA_VISIBLE_DEVICES: all
+    NVIDIA_DRIVER_CAPABILITIES: compute,utility
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # llama-server — Qwen3-Coder-Next (GGUF, MoE expert offload to system RAM)
+  # Profile: agentic
+  # ---------------------------------------------------------------------------
+  llama-server:
+    <<: *gpu-common
+    profiles: [agentic]
+    build:
+      context: ./llama-server
+      dockerfile: Dockerfile
+    container_name: llama-server
+    restart: unless-stopped
+    volumes:
+      - ${LLAMA_MODEL_DIR}:/models:ro
+    ports:
+      - "127.0.0.1:8000:8000"   # localhost only; LiteLLM reaches it via Docker network
+    environment:
+      LLAMA_MODEL_FILE: ${LLAMA_MODEL_FILE}
+      LLAMA_N_GPU_LAYERS: ${LLAMA_N_GPU_LAYERS}
+      LLAMA_CTX_SIZE: ${LLAMA_CTX_SIZE}
+      LLAMA_PARALLEL: ${LLAMA_PARALLEL}
+      LLAMA_BATCH_SIZE: ${LLAMA_BATCH_SIZE}
+      LLAMA_FLASH_ATTN: ${LLAMA_FLASH_ATTN}
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    shm_size: '4gb'
+    networks:
+      - llm-net
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # vLLM — Qwen2.5-Coder (HuggingFace, autocomplete)
+  # Profile: autocomplete
+  # ---------------------------------------------------------------------------
+  vllm:
+    <<: *gpu-common
+    profiles: [autocomplete]
+    image: vllm/vllm-openai:latest
+    container_name: vllm
+    restart: unless-stopped
+    volumes:
+      - ${VLLM_MODEL_DIR}:/models:ro
+      # HF cache so the model isn't re-downloaded on restart
+      - vllm-hf-cache:/root/.cache/huggingface
+    ports:
+      - "127.0.0.1:8001:8001"
+    command: >
+      --model /models/${VLLM_MODEL_NAME}
+      --port 8001
+      --host 0.0.0.0
+      --gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION}
+      --max-model-len ${VLLM_MAX_MODEL_LEN}
+      --served-model-name qwen2.5-coder
+      --enable-prefix-caching
+    environment:
+      HF_HOME: /root/.cache/huggingface
+    networks:
+      - llm-net
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 90s
+
+  # ---------------------------------------------------------------------------
+  # LiteLLM Proxy — unified OpenAI-compatible gateway
+  # Included in all profiles; always runs alongside whichever backend is active.
+  # ---------------------------------------------------------------------------
+  litellm:
+    profiles: [agentic, autocomplete, proxy]
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm
+    restart: unless-stopped
+    depends_on:
+      llama-server:
+        condition: service_healthy
+        required: false
+      vllm:
+        condition: service_healthy
+        required: false
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+      - litellm-db:/app/data
+    ports:
+      - "0.0.0.0:4000:4000"    # LAN-exposed — lock down with firewall in Stage 7
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+    command: >
+      --config /app/config.yaml
+      --port 4000
+      --host 0.0.0.0
+    networks:
+      - llm-net
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4000/health/liveliness"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+networks:
+  llm-net:
+    driver: bridge
+
+volumes:
+  vllm-hf-cache:
+  litellm-db:
