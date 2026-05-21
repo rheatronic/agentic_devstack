@@ -12,11 +12,16 @@ name: llm-stack
 # =============================================================================
 
 x-gpu-common: &gpu-common
-  runtime: nvidia
   environment:
     NVIDIA_VISIBLE_DEVICES: all
     NVIDIA_DRIVER_CAPABILITIES: compute,utility
-
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: 1
+            capabilities: [gpu]
 services:
 
   # ---------------------------------------------------------------------------
@@ -29,7 +34,11 @@ services:
     build:
       context: ./llama-server
       dockerfile: Dockerfile
-    container_name: llama-server
+      args:
+        LLAMA_TAG: b9204             # pin to verified release
+        CUDA_ARCH: "86"              # RTX A6000 = sm_86
+        BUILD_JOBS: "0"              # 0 → nproc inside the builder stage
+    image: llm-stack/llama-server:b9204
     restart: unless-stopped
     volumes:
       - ${LLAMA_MODEL_DIR}:/models:ro
@@ -37,11 +46,17 @@ services:
       - "127.0.0.1:8000:8000"   # localhost only; LiteLLM reaches it via Docker network
     environment:
       LLAMA_MODEL_FILE: ${LLAMA_MODEL_FILE}
-      LLAMA_N_GPU_LAYERS: ${LLAMA_N_GPU_LAYERS}
-      LLAMA_CTX_SIZE: ${LLAMA_CTX_SIZE}
-      LLAMA_PARALLEL: ${LLAMA_PARALLEL}
-      LLAMA_BATCH_SIZE: ${LLAMA_BATCH_SIZE}
-      LLAMA_FLASH_ATTN: ${LLAMA_FLASH_ATTN}
+      LLAMA_OVERRIDE_TENSOR:  ${LLAMA_OVERRIDE_TENSOR:-ffn_down_exps=CPU,ffn_gate_exps=CPU,ffn_up_exps=CPU}
+      LLAMA_HOST:             ${LLAMA_HOST:-0.0.0.0}
+      LLAMA_PORT:             ${LLAMA_PORT:-8000}
+      LLAMA_N_GPU_LAYERS:     ${LLAMA_N_GPU_LAYERS:-999}
+      LLAMA_CTX_SIZE:         ${LLAMA_CTX_SIZE:-32768}
+      LLAMA_N_PARALLEL:       ${LLAMA_N_PARALLEL:-1}
+      LLAMA_THREADS:          ${LLAMA_THREADS:-8}
+      LLAMA_BATCH_SIZE:       ${LLAMA_BATCH_SIZE:-2048}
+      LLAMA_UBATCH_SIZE:      ${LLAMA_UBATCH_SIZE:-512}
+      LLAMA_FLASH_ATTN:       ${LLAMA_FLASH_ATTN:-on}
+      LLAMA_NO_MMAP:          ${LLAMA_NO_MMAP:-1}
     ulimits:
       memlock: -1
       stack: 67108864
@@ -50,10 +65,10 @@ services:
       - llm-net
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 8
-      start_period: 60s
+      interval: 30s
+      timeout: 10s
+      start_period: 120s    # large model takes time to load
+      retries: 3
 
   # ---------------------------------------------------------------------------
   # vLLM — Qwen2.5-Coder (HuggingFace, autocomplete)

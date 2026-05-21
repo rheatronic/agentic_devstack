@@ -52,20 +52,18 @@ if [[ ! -f "${MODEL_PATH}" ]]; then
     exit 1
 fi
 
-# ── defaults ──────────────────────────────────────────────────────────────────
-HOST="${LLAMA_HOST:-0.0.0.0}"
-PORT="${LLAMA_PORT:-8000}"
-N_GPU_LAYERS="${LLAMA_N_GPU_LAYERS:-999}"
-CTX_SIZE="${LLAMA_CTX_SIZE:-32768}"
-N_PARALLEL="${LLAMA_N_PARALLEL:-1}"
-THREADS="${LLAMA_THREADS:-8}"
-BATCH_SIZE="${LLAMA_BATCH_SIZE:-2048}"
-UBATCH_SIZE="${LLAMA_UBATCH_SIZE:-512}"
-FLASH_ATTN="${LLAMA_FLASH_ATTN:-1}"
-
-# MoE expert tensors → RAM by default.
-# Each space-separated token becomes its own --override-tensor argument.
-OVERRIDE_TENSOR="${LLAMA_OVERRIDE_TENSOR:-ffn_down_exps=CPU ffn_gate_exps=CPU ffn_up_exps=CPU}"
+# ── settings ──────────────────────────────────────────────────────────────────
+HOST="${LLAMA_HOST}"
+PORT="${LLAMA_PORT}"
+N_GPU_LAYERS="${LLAMA_N_GPU_LAYERS}"
+CTX_SIZE="${LLAMA_CTX_SIZE}"
+N_PARALLEL="${LLAMA_N_PARALLEL}"
+THREADS="${LLAMA_THREADS}"
+BATCH_SIZE="${LLAMA_BATCH_SIZE}"
+UBATCH_SIZE="${LLAMA_UBATCH_SIZE}"
+FLASH_ATTN="${LLAMA_FLASH_ATTN}"
+NO_MMAP="${LLAMA_NO_MMAP}"
+OVERRIDE_TENSOR="${LLAMA_OVERRIDE_TENSOR}"
 
 # ── build argument array ──────────────────────────────────────────────────────
 ARGS=(
@@ -80,17 +78,18 @@ ARGS=(
     --ubatch-size  "${UBATCH_SIZE}"
 )
 
-# Flash attention
-if [[ "${FLASH_ATTN}" == "1" ]]; then
-    ARGS+=( --flash-attn )
+# Flash attention — accepts: on, off, auto
+if [[ -n "${LLAMA_FLASH_ATTN}" ]]; then
+    ARGS+=( --flash-attn "${LLAMA_FLASH_ATTN}" )
 fi
 
-# --override-tensor: one flag per space-delimited PATTERN=BACKEND token
-if [[ -n "${OVERRIDE_TENSOR}" ]]; then
-    for token in ${OVERRIDE_TENSOR}; do
-        ARGS+=( --override-tensor "${token}" )
-    done
+# mmap
+if [[ "${NO_MMAP}" == "1" ]]; then
+    ARGS+=( "--no-mmap" )
 fi
+
+# --override-tensor
+ARGS+=( --override-tensor "${OVERRIDE_TENSOR}" )
 
 # Pass any extra args from CMD / docker-compose command: block straight through
 ARGS+=( "$@" )
